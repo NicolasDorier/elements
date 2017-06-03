@@ -25,6 +25,7 @@
 
 #include <univalue.h>
 
+#include <boost/algorithm/string.hpp>
 #include <boost/thread/thread.hpp> // boost::thread::interrupt
 
 #include <mutex>
@@ -1370,6 +1371,165 @@ UniValue reconsiderblock(const JSONRPCRequest& request)
     return NullUniValue;
 }
 
+static void UpdateBlockStats(const CBlock& block, const CAsset& asset, std::vector<std::string>& plot_values, std::map<std::string, UniValue>& map_stats)
+{
+    CAmount min = MAX_MONEY;
+    CAmount max = 0;
+    CAmount total = 0;
+    CFeeRate minfeerate = CFeeRate(MAX_MONEY, 1);
+    CFeeRate maxfeerate = CFeeRate(0);
+    int64_t total_weight = 0;
+    int64_t inputs = 0;
+    int64_t outputs = 0;
+
+    for (const auto& tx : block.vtx) {
+
+        inputs += tx->vin.size();
+        outputs += tx->vout.size();
+
+        if (tx->IsCoinBase()) {
+            continue;
+        }
+
+        CAmount txfee = tx->GetFee(asset);
+        int64_t weight = GetTransactionWeight(*tx);
+        total_weight += weight;
+        CFeeRate feerate = CFeeRate(txfee, weight);
+        for (const std::string& plot_value : plot_values) {
+            if (plot_value == "minfee") {
+                min = std::min(min, txfee);
+            } else if (plot_value == "maxfee") {
+                max = std::max(max, txfee);
+            } else if (plot_value == "totalfee") {
+                total += txfee;
+            } else if (plot_value == "minfeerate") {
+                minfeerate = std::min(minfeerate, feerate);
+            } else if (plot_value == "maxfeerate") {
+                maxfeerate = std::max(maxfeerate, feerate);
+            }
+        }
+    }
+
+    for (const std::string& plot_value : plot_values) {
+        // Update map_stats
+        if (plot_value == "minfee") {
+            map_stats[plot_value].push_back((min == MAX_MONEY) ? 0 : min);
+        } else if (plot_value == "maxfee") {
+            map_stats[plot_value].push_back(max);
+        } else if (plot_value == "totalfee") {
+            map_stats[plot_value].push_back(total);
+        } else if (plot_value == "minfeerate") {
+            map_stats[plot_value].push_back((minfeerate == CFeeRate(MAX_MONEY, 1)) ? CFeeRate(0).GetFee(1) : minfeerate.GetFee(1));
+        } else if (plot_value == "maxfeerate") {
+            map_stats[plot_value].push_back(maxfeerate.GetFee(1));
+        } else if (plot_value == "avgfee") {
+            map_stats[plot_value].push_back((block.vtx.size() > 1) ? total / (block.vtx.size() - 1) : 0);
+        } else if (plot_value == "avgfeerate") {
+            map_stats[plot_value].push_back(CFeeRate(total, total_weight).GetFee(1));
+        } else if (plot_value == "txs") {
+            map_stats[plot_value].push_back(block.vtx.size());
+        } else if (plot_value == "ins") {
+            map_stats[plot_value].push_back(inputs);
+        } else if (plot_value == "outs") {
+            map_stats[plot_value].push_back(outputs);
+        }
+    }
+}
+
+static bool IsAllowedPlotValue(const std::string& plot_value, std::vector<std::string>& allowed_plot_values)
+{
+    for (const std::string& allowed_plot_value : allowed_plot_values) {
+        if (allowed_plot_value == plot_value) {
+            return true;
+        }
+    }
+    return false;
+}
+
+UniValue getperblockstats(const JSONRPCRequest& request)
+{
+    std::string str_allowed_plot_values = "minfee,maxfee,totalfee,minfeerate,maxfeerate,avgfee,avgfeerate,txs,ins,outs";
+    std::vector<std::string> allowed_plot_values;
+    boost::split(allowed_plot_values, str_allowed_plot_values, boost::is_any_of(","));
+
+    if (request.fHelp || request.params.size() < 1 || request.params.size() > 4)
+        throw std::runtime_error(
+            "getperblockstats ( nStart nEnd plotValues )\n"
+            "\nCompute per block statistics for a given window.\n"
+            "\nArguments:\n"
+            "1. \"start\"      (numeric, required) The height of the block that starts the window.\n"
+            "2. \"end\"        (numeric, optional) The height of the block that ends the window (default: current tip).\n"
+            "3. \"plotvalues\"  (string,  optional) Values to plot (comma separated), default(all): " + str_allowed_plot_values +
+            "4. \"asset\"       (string,  optional) Hex asset id or asset label for fees.\n"
+            "\nResult:\n"
+            "{\n"
+            "}\n"
+            "\nExamples:\n"
+            + HelpExampleCli("getperblockstats", "1000 1000 \"minfeerate,avgfeerate\"")
+            + HelpExampleRpc("getperblockstats", "1000 1000 \"maxfeerate,avgfeerate\"")
+        );
+
+    LOCK(cs_main);
+
+    int start = request.params[0].get_int();
+    if (start < 1 || start > chainActive.Height()) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "Start block height out of range");
+    }
+
+    int end;
+    if (request.params.size() > 1) {
+        end = request.params[1].get_int();
+    } else {
+        end = chainActive.Height();
+    }
+    if (end < 0 || end > chainActive.Height()) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "End block height out of range");
+    }
+
+    std::string str_plot_values = str_allowed_plot_values;
+    if (request.params.size() > 2) {
+        str_plot_values = request.params[2].get_str();
+    }
+    std::vector<std::string> plot_values;
+    boost::split(plot_values, str_plot_values, boost::is_any_of(","));
+    for (const std::string plot_value : plot_values) {
+        if (!IsAllowedPlotValue(plot_value, allowed_plot_values)) {
+            throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Invalid plot value %s", plot_value));
+        }
+    }
+
+    CAsset asset = policyAsset;
+    if (request.params.size() > 3) {
+        asset = GetAssetFromString(request.params[3].get_str());
+    }
+
+    std::map<std::string, UniValue> map_stats;
+    for (const std::string& allowed_plot_value : allowed_plot_values) {
+        map_stats[allowed_plot_value] = UniValue(UniValue::VARR);
+    }
+    map_stats["height"] = UniValue(UniValue::VARR);
+    map_stats["time"] = UniValue(UniValue::VARR);
+
+    CBlockIndex* pindex = chainActive[end];
+    CBlock block;
+    for (int i = end; i >= start; i--) {
+        ReadBlockCheckPruned(pindex, block);
+        UpdateBlockStats(block, asset, plot_values, map_stats);
+        // For the X axis:
+        map_stats["height"].push_back(i);
+        map_stats["time"].push_back(block.GetBlockTime());
+        pindex = pindex->pprev;
+    }
+
+    UniValue ret(UniValue::VOBJ);
+    for (const std::string plot_value : plot_values) {
+        ret.push_back(Pair(plot_value, map_stats[plot_value]));
+    }
+    ret.push_back(Pair("height", map_stats["height"]));
+    ret.push_back(Pair("time", map_stats["time"]));
+    return ret;
+}
+
 static const CRPCCommand commands[] =
 { //  category              name                      actor (function)         okSafe argNames
   //  --------------------- ------------------------  -----------------------  ------ ----------
@@ -1392,6 +1552,7 @@ static const CRPCCommand commands[] =
     { "blockchain",         "verifychain",            &verifychain,            true,  {"checklevel","nblocks"} },
 
     { "blockchain",         "preciousblock",          &preciousblock,          true,  {"blockhash"} },
+    { "blockchain",         "getperblockstats",       &getperblockstats,       true,  {"start", "end", "plotvalues", "asset"}  },
 
     /* Not shown in help */
     { "hidden",             "invalidateblock",        &invalidateblock,        true,  {"blockhash"} },
