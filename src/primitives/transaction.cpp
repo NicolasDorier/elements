@@ -205,6 +205,17 @@ CAmountMap CTransaction::GetFee() const
     return fee;
 }
 
+CAmount CTransaction::GetFee(const CAsset& asset) const
+{
+    CAmount fee = 0;
+    for (unsigned int i = 0; i < vout.size(); i++) {        
+        if (vout[i].IsFee() && vout[i].nAsset.GetAsset() == asset) {
+            fee += vout[i].nValue.GetAmount();
+        }
+    }
+    return fee;
+}
+
 /* For backward compatibility, the hash is initialized to 0. TODO: remove the need for this default constructor entirely. */
 CTransaction::CTransaction() : nVersion(CTransaction::CURRENT_VERSION), vin(), vout(), wit(), nLockTime(0), hash() {}
 CTransaction::CTransaction(const CMutableTransaction &tx) : nVersion(tx.nVersion), vin(tx.vin), vout(tx.vout), wit(tx.wit), nLockTime(tx.nLockTime), hash(ComputeHash()) {}
