@@ -44,23 +44,6 @@ using namespace std;
 int64_t nWalletUnlockTime;
 static CCriticalSection cs_nWalletUnlockTime;
 
-/**
- * Returns asset id corresponding to the given asset expression, which is either an asset label or a hex value.
- * @param  strasset A label string or a hex value corresponding to an asset
- * @return       The asset ID for the given expression
- */
-static CAsset GetAssetFromString(const std::string& strasset)
-{
-    CAsset asset = gAssetsDir.GetAsset(strasset);
-    if (asset.IsNull() && strasset.size() == 64 && IsHex(strasset)) {
-        asset = CAsset(uint256S(strasset));
-    }
-    if (asset.IsNull()) {
-        throw JSONRPCError(RPC_WALLET_ERROR, strprintf("Unknown label and invalid asset hex: %s", strasset.c_str()));
-    }
-    return asset;
-}
-
 std::string HelpRequiringPassphrase()
 {
     return pwalletMain && pwalletMain->IsCrypted()

@@ -5,7 +5,9 @@
 
 #include "rpc/server.h"
 
+#include "assetsdir.h"
 #include "base58.h"
+#include "global/common.h"
 #include "init.h"
 #include "random.h"
 #include "sync.h"
@@ -128,6 +130,18 @@ void RPCTypeCheckObj(const UniValue& o,
             }
         }
     }
+}
+
+CAsset GetAssetFromString(const std::string& strasset)
+{
+    CAsset asset = gAssetsDir.GetAsset(strasset);
+    if (asset.IsNull() && strasset.size() == 64 && IsHex(strasset)) {
+        asset = CAsset(uint256S(strasset));
+    }
+    if (asset.IsNull()) {
+        throw JSONRPCError(RPC_TYPE_ERROR, strprintf("Unknown label and invalid asset hex: %s", strasset.c_str()));
+    }
+    return asset;
 }
 
 CAmount AmountFromValue(const UniValue& value)

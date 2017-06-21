@@ -196,6 +196,12 @@ extern std::vector<unsigned char> ParseHexV(const UniValue& v, std::string strNa
 extern std::vector<unsigned char> ParseHexO(const UniValue& o, std::string strKey);
 
 extern int64_t nWalletUnlockTime;
+/**
+ * Returns asset id corresponding to the given asset expression, which is either an asset label or a hex value.
+ * @param  strasset A label string or a hex value corresponding to an asset
+ * @return       The asset ID for the given expression
+ */
+CAsset GetAssetFromString(const std::string& strasset);
 extern CAmount AmountFromValue(const UniValue& value);
 extern UniValue ValueFromAmount(const CAmount& amount);
 extern double GetDifficulty(const CBlockIndex* blockindex = NULL);
